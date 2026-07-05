@@ -10,7 +10,6 @@ import pandas as pd
 import seaborn as sns
 
 from common import (
-    HISTOGRAM_BINS,
     OUTPUT_ROOT,
     apply_grid,
     apply_robust_xlim,
@@ -21,6 +20,7 @@ from common import (
     flatten_baseline,
     image_summary,
     load_image_records,
+    plot_intensity_density,
     robust_percentile_values,
     sanitized_stem,
     save_figure,
@@ -62,14 +62,14 @@ def plot_image_eda(record_index: int, group_count: int, record_output_dir: Path)
     show_image(axes[0, 2], flattened, "Baseline Flattened")
 
     histogram_values = np.concatenate([image.ravel(), flattened.ravel()])
-    axes[1, 0].hist(image.ravel(), bins=HISTOGRAM_BINS, alpha=0.75, label="raw")
-    axes[1, 0].hist(flattened.ravel(), bins=HISTOGRAM_BINS, alpha=0.55, label="flattened")
+    plot_intensity_density(axes[1, 0], image, "raw", alpha=0.75)
+    plot_intensity_density(axes[1, 0], flattened, "flattened", alpha=0.55)
     for key in ("p1", "p50", "p99"):
         if key in percentiles:
             axes[1, 0].axvline(percentiles[key], linestyle="--", linewidth=1, label=key)
-    axes[1, 0].set_title("Intensity Histogram")
+    axes[1, 0].set_title("Intensity Distribution")
     axes[1, 0].set_xlabel("Normalized intensity")
-    axes[1, 0].set_ylabel("Pixel count")
+    axes[1, 0].set_ylabel("Density")
     apply_robust_xlim(axes[1, 0], histogram_values)
     apply_grid(axes[1, 0])
     axes[1, 0].legend(fontsize=7)
@@ -117,6 +117,7 @@ def save_group_histograms(stats: pd.DataFrame, output_dir: Path) -> None:
         )
     axes[0].set_title("Raw Intensity Distributions (all 10 FOVs)")
     axes[0].set_xlabel("Normalized intensity")
+    axes[0].set_ylabel("Density")
     apply_robust_xlim(axes[0], np.concatenate([record.image.ravel()[::20] for record in records]))
     apply_grid(axes[0])
     axes[0].legend(fontsize=6)

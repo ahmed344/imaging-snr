@@ -8,10 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from skimage.measure import label
 
 from common import (
-    HISTOGRAM_BINS,
     OUTPUT_ROOT,
     apply_grid,
     apply_robust_xlim,
@@ -24,6 +22,7 @@ from common import (
     harmonize_record,
     load_image_records,
     overlay_mask,
+    plot_intensity_density,
     robust_scale_from_images,
     sanitized_stem,
     save_figure,
@@ -119,34 +118,20 @@ def plot_enhancement_stages(
         None: The figure is saved to disk.
     """
 
-    fig, axes = plt.subplots(2, 4, figsize=(15, 7.5))
+    fig, axes = plt.subplots(2, 3, figsize=(12, 7.5))
     fig.suptitle(f"{group} | {file_name}")
     show_image(axes[0, 0], raw, "Raw")
     show_image(axes[0, 1], harmonized, "Harmonized")
     show_image(axes[0, 2], denoised, "Edge-Preserving Denoised")
-    show_image(axes[0, 3], enhanced, "Small Bright Response")
-    show_image(axes[1, 0], overlay_mask(harmonized, candidate_mask), "Candidates on Harmonized", cmap=None)
-    axes[1, 1].hist(harmonized.ravel()[::10], bins=HISTOGRAM_BINS, alpha=0.6, label="harmonized")
-    axes[1, 1].hist(denoised.ravel()[::10], bins=HISTOGRAM_BINS, alpha=0.6, label="denoised")
-    axes[1, 1].set_title("Denoising Histogram Check")
-    apply_robust_xlim(axes[1, 1], np.concatenate([harmonized.ravel()[::10], denoised.ravel()[::10]]))
-    apply_grid(axes[1, 1])
-    axes[1, 1].legend(fontsize=7)
-    axes[1, 2].hist(enhanced.ravel()[::10], bins=HISTOGRAM_BINS, alpha=0.8)
-    axes[1, 2].axvline(np.percentile(enhanced, 99.3), color="red", linestyle="--", linewidth=1)
-    axes[1, 2].set_title("Enhanced Response Histogram")
-    apply_robust_xlim(axes[1, 2], enhanced.ravel()[::10])
+    show_image(axes[1, 0], enhanced, "Small Bright Response")
+    show_image(axes[1, 1], overlay_mask(harmonized, candidate_mask), "Candidates on Harmonized", cmap=None)
+    plot_intensity_density(axes[1, 2], harmonized, "harmonized", alpha=0.6)
+    plot_intensity_density(axes[1, 2], denoised, "denoised", alpha=0.6)
+    axes[1, 2].set_title("Denoising Density Check")
+    axes[1, 2].set_ylabel("Density")
+    apply_robust_xlim(axes[1, 2], np.concatenate([harmonized.ravel()[::10], denoised.ravel()[::10]]))
     apply_grid(axes[1, 2])
-    axes[1, 3].axis("off")
-    axes[1, 3].text(
-        0.0,
-        0.9,
-        f"Candidate pixels: {int(candidate_mask.sum())}\n"
-        f"Candidate objects: {int(label(candidate_mask).max())}\n"
-        f"Noise MAD before: {estimate_noise_mad(harmonized):.5f}\n"
-        f"Noise MAD after: {estimate_noise_mad(denoised):.5f}",
-        va="top",
-    )
+    axes[1, 2].legend(fontsize=7)
     save_figure(fig, output_dir / f"{group}_{Path(file_name).stem}_enhancement.png")
 
 

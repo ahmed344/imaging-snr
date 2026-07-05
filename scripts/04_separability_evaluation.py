@@ -38,6 +38,7 @@ from common import (
     extract_candidate_features,
     harmonize_record,
     load_image_records,
+    robust_limits,
     robust_scale_from_images,
     save_figure,
 )
@@ -60,6 +61,7 @@ FEATURE_COLUMNS = [
     "cnr",
 ]
 UMAP_DOT_SIZE = 14
+PANEL_TITLE_FONTSIZE = 17
 GROUP_MARKERS = {"Bacteria": "o", "Particles": "X"}
 
 
@@ -399,10 +401,10 @@ def cluster_umap(coords: np.ndarray) -> dict[str, np.ndarray]:
 
     dbscan_eps = choose_dbscan_eps(coords)
     return {
-        "kmeans_2": KMeans(n_clusters=2, random_state=42, n_init=20).fit_predict(coords),
-        "gaussian_mixture_2": GaussianMixture(n_components=2, random_state=42).fit_predict(coords),
-        "agglomerative_2": AgglomerativeClustering(n_clusters=2, linkage="ward").fit_predict(coords),
-        "spectral_2": SpectralClustering(n_clusters=2, random_state=42, assign_labels="kmeans").fit_predict(coords),
+        "kmeans_5": KMeans(n_clusters=5, random_state=42, n_init=20).fit_predict(coords),
+        "gaussian_mixture_5": GaussianMixture(n_components=5, random_state=42).fit_predict(coords),
+        "agglomerative_5": AgglomerativeClustering(n_clusters=5, linkage="ward").fit_predict(coords),
+        "spectral_5": SpectralClustering(n_clusters=5, random_state=42, assign_labels="kmeans").fit_predict(coords),
         "dbscan": DBSCAN(eps=dbscan_eps, min_samples=10).fit_predict(coords),
         "leiden": leiden_cluster_labels(coords),
     }
@@ -487,18 +489,19 @@ def plot_feature_scatter(features: pd.DataFrame, output_dir: Path) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
     sns.scatterplot(data=features, x="area", y="sbr", hue="group", alpha=0.35, s=18, ax=axes[0])
     axes[0].set_xscale("log")
-    axes[0].set_title("Candidate Area vs SBR")
     apply_robust_xlim(axes[0], features["area"].to_numpy())
     apply_robust_ylim(axes[0], features["sbr"].to_numpy())
     sns.scatterplot(data=features, x="axis_ratio", y="cnr", hue="group", alpha=0.35, s=18, ax=axes[1])
-    axes[1].set_title("Shape Elongation vs CNR")
     apply_robust_xlim(axes[1], features["axis_ratio"].to_numpy())
     apply_robust_ylim(axes[1], features["cnr"].to_numpy())
     sns.scatterplot(data=features, x="eccentricity", y="solidity", hue="group", alpha=0.35, s=18, ax=axes[2])
-    axes[2].set_title("Morphology: Eccentricity vs Solidity")
     apply_robust_xlim(axes[2], features["eccentricity"].to_numpy())
     apply_robust_ylim(axes[2], features["solidity"].to_numpy())
     for ax in axes:
+        ax.set_title("")
+        ax.set_xlabel(ax.get_xlabel(), fontsize=PANEL_TITLE_FONTSIZE)
+        ax.set_ylabel(ax.get_ylabel(), fontsize=PANEL_TITLE_FONTSIZE)
+        ax.tick_params(axis="both", labelsize=PANEL_TITLE_FONTSIZE)
         apply_grid(ax)
     save_figure(fig, output_dir / "interpretable_feature_separation.png")
 
@@ -642,7 +645,7 @@ def plot_umap_clusters(umap_df: pd.DataFrame, cluster_assignments: pd.DataFrame,
     """
 
     methods = [column for column in cluster_assignments.columns if column.startswith("cluster_")]
-    fig, axes = plt.subplots(3, 3, figsize=(16, 13))
+    fig, axes = plt.subplots(2, 4, figsize=(16, 8))
     flattened_axes = axes.ravel()
 
     sns.scatterplot(
@@ -655,7 +658,7 @@ def plot_umap_clusters(umap_df: pd.DataFrame, cluster_assignments: pd.DataFrame,
         ax=flattened_axes[0],
         legend=False,
     )
-    flattened_axes[0].set_title("true labels")
+    flattened_axes[0].set_title("true labels", fontsize=PANEL_TITLE_FONTSIZE)
     apply_robust_xlim(flattened_axes[0], umap_df["umap1"].to_numpy())
     apply_robust_ylim(flattened_axes[0], umap_df["umap2"].to_numpy())
     apply_grid(flattened_axes[0])
@@ -673,7 +676,7 @@ def plot_umap_clusters(umap_df: pd.DataFrame, cluster_assignments: pd.DataFrame,
         ax=flattened_axes[1],
         legend=False,
     )
-    flattened_axes[1].set_title("source image batches")
+    flattened_axes[1].set_title("source image batches", fontsize=PANEL_TITLE_FONTSIZE)
     apply_robust_xlim(flattened_axes[1], umap_df["umap1"].to_numpy())
     apply_robust_ylim(flattened_axes[1], umap_df["umap2"].to_numpy())
     apply_grid(flattened_axes[1])
@@ -691,10 +694,15 @@ def plot_umap_clusters(umap_df: pd.DataFrame, cluster_assignments: pd.DataFrame,
             ax=ax,
             legend=False,
         )
-        ax.set_title(method.replace("cluster_", ""))
+        ax.set_title(method.replace("cluster_", ""), fontsize=PANEL_TITLE_FONTSIZE)
         apply_robust_xlim(ax, umap_df["umap1"].to_numpy())
         apply_robust_ylim(ax, umap_df["umap2"].to_numpy())
         apply_grid(ax)
+    for ax in flattened_axes[: 2 + len(methods)]:
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_xticks([])
+        ax.set_yticks([])
     for ax in flattened_axes[2 + len(methods) :]:
         ax.axis("off")
     save_figure(fig, output_dir / "candidate_feature_umap_clusters.png")
@@ -721,10 +729,17 @@ def plot_feature_distributions(features: pd.DataFrame, output_dir: Path) -> None
     for ax, feature in zip(axes.ravel(), ["area", "axis_ratio", "eccentricity", "sbr", "cnr", "solidity"]):
         subset = melted[melted["feature"] == feature]
         sns.violinplot(data=subset, x="group", y="value", ax=ax, cut=0, inner="quartile")
-        ax.set_title(feature)
-        if feature in {"area", "axis_ratio", "cnr"}:
+        ax.set_title(feature, fontsize=PANEL_TITLE_FONTSIZE)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        if feature in {"area", "axis_ratio"}:
+            _, upper = robust_limits(subset["value"].to_numpy())
+            ax.set_ylim(0.0, upper)
+        elif feature == "cnr":
             ax.set_yscale("symlog")
-        apply_robust_ylim(ax, subset["value"].to_numpy())
+            apply_robust_ylim(ax, subset["value"].to_numpy())
+        else:
+            apply_robust_ylim(ax, subset["value"].to_numpy())
         apply_grid(ax)
     save_figure(fig, output_dir / "candidate_feature_distributions.png")
 

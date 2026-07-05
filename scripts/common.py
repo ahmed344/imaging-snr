@@ -8,6 +8,7 @@ from typing import Iterable, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 from matplotlib.axes import Axes
 from scipy import ndimage as ndi
 from skimage import exposure, img_as_float, io
@@ -25,7 +26,7 @@ OUTPUT_ROOT = Path("outputs")
 GROUP_TO_MACHINE = {"Bacteria": "Machine 1", "Particles": "Machine 2"}
 FIGURE_EXT = ".png"
 TIFF_IMAGE_EXT = ".tif"
-HISTOGRAM_BINS = 500
+INTENSITY_DENSITY_SUBSAMPLE = 10
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,32 @@ def apply_robust_ylim(ax: Axes, values: np.ndarray, low_pct: float = 0.5, high_p
     """
 
     ax.set_ylim(*robust_limits(values, low_pct=low_pct, high_pct=high_pct))
+
+
+def plot_intensity_density(
+    ax: Axes,
+    values: np.ndarray,
+    label: str | None = None,
+    subsample: int = INTENSITY_DENSITY_SUBSAMPLE,
+    **kwargs,
+) -> None:
+    """Plot a normalized intensity density curve using Gaussian KDE.
+
+    Args:
+        ax (Axes): Matplotlib axes to draw into.
+        values (np.ndarray): Intensity samples.
+        label (str | None): Optional legend label for the curve.
+        subsample (int): Pixel stride used before KDE for performance.
+        **kwargs: Additional keyword arguments forwarded to sns.kdeplot.
+
+    Returns:
+        None: The density curve is drawn into the provided axes.
+    """
+
+    plot_kwargs = dict(kwargs)
+    if label is not None:
+        plot_kwargs["label"] = label
+    sns.kdeplot(values.ravel()[::subsample], ax=ax, **plot_kwargs)
 
 
 def ensure_dir(path: Path) -> Path:

@@ -10,7 +10,6 @@ import pandas as pd
 import seaborn as sns
 
 from common import (
-    HISTOGRAM_BINS,
     OUTPUT_ROOT,
     apply_grid,
     apply_robust_xlim,
@@ -22,6 +21,7 @@ from common import (
     large_artifact_halo_metric,
     load_image_records,
     overlay_mask,
+    plot_intensity_density,
     robust_scale_from_images,
     sanitized_stem,
     save_figure,
@@ -109,10 +109,11 @@ def plot_harmonization_stages(
     for image, label_text in ((raw, "raw"), (corrected, "flattened"), (harmonized, "harmonized")):
         axes[2, 0].plot(np.median(image, axis=1), label=label_text)
         axes[2, 1].plot(np.median(image, axis=0), label=label_text)
-        axes[2, 2].hist(image.ravel()[::10], bins=HISTOGRAM_BINS, alpha=0.45, label=label_text)
+        plot_intensity_density(axes[2, 2], image, label_text, alpha=0.45)
     axes[2, 0].set_title("Row Median Profiles")
     axes[2, 1].set_title("Column Median Profiles")
-    axes[2, 2].set_title("Intensity Histogram")
+    axes[2, 2].set_title("Intensity Distribution")
+    axes[2, 2].set_ylabel("Density")
     apply_robust_xlim(axes[2, 2], np.concatenate([raw.ravel()[::10], corrected.ravel()[::10], harmonized.ravel()[::10]]))
     axes[0, 2].text(
         0.02,
@@ -122,16 +123,6 @@ def plot_harmonization_stages(
         va="top",
         ha="left",
         transform=axes[0, 2].transAxes,
-    )
-    axes[1, 2].text(
-        0.0,
-        -0.08,
-        "Calibration philosophy: dark/flat references should be acquired where possible; "
-        "post-acquisition fitting excludes objects so drift and membrane background are corrected "
-        "without learning bright artifacts as illumination.",
-        va="top",
-        transform=axes[1, 2].transAxes,
-        wrap=True,
     )
     for ax in axes[2, :3]:
         ax.legend(fontsize=7)

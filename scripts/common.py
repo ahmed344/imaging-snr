@@ -895,6 +895,7 @@ def extract_candidate_features(
     source_file: str,
     group: str,
     machine: str,
+    denoised_intensity_image: np.ndarray | None = None,
     min_area: int = 2,
     max_area: int = 900,
     max_candidates: int = 5000,
@@ -907,6 +908,7 @@ def extract_candidate_features(
         source_file (str): Source image filename.
         group (str): Biological or interference set label.
         machine (str): Machine label.
+        denoised_intensity_image (np.ndarray | None): Optional denoised intensity image measured over the same candidates.
         min_area (int): Minimum candidate area in pixels.
         max_area (int): Maximum candidate area in pixels.
         max_candidates (int): Maximum number of strongest candidates to return per image.
@@ -931,13 +933,30 @@ def extract_candidate_features(
             int(region.label),
             region.bbox,
         )
+        denoised_bg_mean = bg_mean
+        denoised_bg_std = bg_std
+        if denoised_intensity_image is not None:
+            denoised_bg_mean, denoised_bg_std = local_background_stats_for_region(
+                denoised_intensity_image,
+                labeled,
+                int(region.label),
+                region.bbox,
+            )
         min_row, min_col, max_row, max_col = region.bbox
         local_label = labeled[min_row:max_row, min_col:max_col] == region.label
         local_enhanced = enhanced[min_row:max_row, min_col:max_col]
+        local_denoised = intensity_image[min_row:max_row, min_col:max_col]
+        if denoised_intensity_image is not None:
+            local_denoised = denoised_intensity_image[min_row:max_row, min_col:max_col]
         candidate_mean = region_float_property(region, "intensity_mean", "mean_intensity")
         candidate_max = region_float_property(region, "intensity_max", "max_intensity")
+        denoised_candidate_values = local_denoised[local_label]
+        denoised_candidate_mean = float(np.mean(denoised_candidate_values))
+        denoised_candidate_max = float(np.max(denoised_candidate_values))
         sbr = candidate_mean / max(bg_mean, 1e-9)
         cnr = (candidate_mean - bg_mean) / max(bg_std, 1e-9)
+        denoised_sbr = denoised_candidate_mean / max(denoised_bg_mean, 1e-9)
+        denoised_cnr = (denoised_candidate_mean - denoised_bg_mean) / max(denoised_bg_std, 1e-9)
         major_axis = region_float_property(region, "axis_major_length", "major_axis_length")
         minor_axis_value = region_float_property(region, "axis_minor_length", "minor_axis_length")
         minor_axis = max(minor_axis_value, 1e-9)
@@ -960,6 +979,12 @@ def extract_candidate_features(
                 "local_background_std": bg_std,
                 "sbr": float(sbr),
                 "cnr": float(cnr),
+                "denoised_mean_intensity": denoised_candidate_mean,
+                "denoised_max_intensity": denoised_candidate_max,
+                "denoised_local_background_mean": denoised_bg_mean,
+                "denoised_local_background_std": denoised_bg_std,
+                "denoised_sbr": float(denoised_sbr),
+                "denoised_cnr": float(denoised_cnr),
             }
         )
     limited_mask = np.isin(labeled, [region.label for region in limited_regions])

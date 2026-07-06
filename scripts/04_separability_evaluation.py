@@ -60,6 +60,14 @@ FEATURE_COLUMNS = [
     "sbr",
     "cnr",
 ]
+STAGE_FEATURE_RENAMES = {
+    "denoised_mean_intensity": "mean_intensity",
+    "denoised_max_intensity": "max_intensity",
+    "denoised_local_background_mean": "local_background_mean",
+    "denoised_local_background_std": "local_background_std",
+    "denoised_sbr": "sbr",
+    "denoised_cnr": "cnr",
+}
 UMAP_DOT_SIZE = 14
 PANEL_TITLE_FONTSIZE = 17
 GROUP_MARKERS = {"Bacteria": "o", "Particles": "X"}
@@ -98,18 +106,42 @@ def collect_candidate_features() -> pd.DataFrame:
     rows: list[dict[str, float | str]] = []
     for record in load_image_records():
         harmonized_result = harmonize_record(record, reference_low=reference_low, reference_high=reference_high)
-        _, enhanced = enhance_signal(harmonized_result.harmonized)
+        denoised, enhanced = enhance_signal(harmonized_result.harmonized)
         features, _ = extract_candidate_features(
             enhanced,
             harmonized_result.harmonized,
             record.path.name,
             record.group,
             record.machine,
+            denoised_intensity_image=denoised,
         )
         rows.extend(features)
     if not rows:
         raise RuntimeError("No candidate features were extracted; inspect enhancement thresholds.")
     return pd.DataFrame(rows)
+
+
+def feature_view_for_stage(features: pd.DataFrame, image_stage: str) -> pd.DataFrame:
+    """Build a candidate feature table for one measurement image stage.
+
+    Args:
+        features (pd.DataFrame): Candidate features with harmonized and denoised measurement columns.
+        image_stage (str): Measurement stage to expose, either harmonized or denoised.
+
+    Returns:
+        pd.DataFrame: Feature table where generic intensity, SBR, and CNR columns match the requested stage.
+    """
+
+    view = features.copy()
+    if image_stage == "harmonized":
+        view["image_stage"] = "harmonized"
+        return view
+    if image_stage != "denoised":
+        raise ValueError(f"Unsupported image stage: {image_stage}")
+    view = view.drop(columns=list(STAGE_FEATURE_RENAMES.values()), errors="ignore")
+    view = view.rename(columns=STAGE_FEATURE_RENAMES)
+    view["image_stage"] = "denoised"
+    return view
 
 
 def cohen_d(first: pd.Series, second: pd.Series) -> float:
@@ -475,46 +507,51 @@ def group_markers(umap_df: pd.DataFrame) -> dict[str, str]:
     return {group: GROUP_MARKERS.get(group, "o") for group in sorted(umap_df["group"].unique())}
 
 
-def plot_feature_scatter(features: pd.DataFrame, output_dir: Path) -> None:
+def plot_feature_scatter(harmonized_features: pd.DataFrame, denoised_features: pd.DataFrame, output_dir: Path) -> None:
     """Plot interpretable feature scatter views for bacteria/particle separation.
 
     Args:
-        features (pd.DataFrame): Candidate feature table.
+        harmonized_features (pd.DataFrame): Candidate feature table measured on harmonized images.
+        denoised_features (pd.DataFrame): Candidate feature table measured on denoised images.
         output_dir (Path): Directory where figures are saved.
 
     Returns:
         None: Figures are written to disk.
     """
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-    sns.scatterplot(data=features, x="area", y="sbr", hue="group", alpha=0.35, s=18, ax=axes[0])
-    axes[0].set_xscale("log")
-    apply_robust_xlim(axes[0], features["area"].to_numpy())
-    apply_robust_ylim(axes[0], features["sbr"].to_numpy())
-    sns.scatterplot(data=features, x="axis_ratio", y="cnr", hue="group", alpha=0.35, s=18, ax=axes[1])
-    apply_robust_xlim(axes[1], features["axis_ratio"].to_numpy())
-    apply_robust_ylim(axes[1], features["cnr"].to_numpy())
-    sns.scatterplot(data=features, x="eccentricity", y="solidity", hue="group", alpha=0.35, s=18, ax=axes[2])
-    apply_robust_xlim(axes[2], features["eccentricity"].to_numpy())
-    apply_robust_ylim(axes[2], features["solidity"].to_numpy())
-    for ax in axes:
-        ax.set_title("")
-        ax.set_xlabel(ax.get_xlabel(), fontsize=PANEL_TITLE_FONTSIZE)
-        ax.set_ylabel(ax.get_ylabel(), fontsize=PANEL_TITLE_FONTSIZE)
-        ax.tick_params(axis="both", labelsize=PANEL_TITLE_FONTSIZE)
-        apply_grid(ax)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8.5), sharex="col")
+    stage_rows = (("Harmonized", harmonized_features), ("Denoised", denoised_features))
+    for row_index, (stage_label, features) in enumerate(stage_rows):
+        row_axes = axes[row_index]
+        sns.scatterplot(data=features, x="area", y="sbr", hue="group", alpha=0.35, s=18, ax=row_axes[0])
+        row_axes[0].set_xscale("log")
+        apply_robust_xlim(row_axes[0], features["area"].to_numpy())
+        apply_robust_ylim(row_axes[0], features["sbr"].to_numpy())
+        sns.scatterplot(data=features, x="axis_ratio", y="cnr", hue="group", alpha=0.35, s=18, ax=row_axes[1])
+        apply_robust_xlim(row_axes[1], features["axis_ratio"].to_numpy())
+        apply_robust_ylim(row_axes[1], features["cnr"].to_numpy())
+        sns.scatterplot(data=features, x="eccentricity", y="solidity", hue="group", alpha=0.35, s=18, ax=row_axes[2])
+        apply_robust_xlim(row_axes[2], features["eccentricity"].to_numpy())
+        apply_robust_ylim(row_axes[2], features["solidity"].to_numpy())
+        row_axes[0].set_ylabel(f"{stage_label}\nSBR", fontsize=PANEL_TITLE_FONTSIZE)
+        for ax in row_axes:
+            ax.set_title("")
+            ax.set_xlabel(ax.get_xlabel(), fontsize=PANEL_TITLE_FONTSIZE)
+            ax.tick_params(axis="both", labelsize=PANEL_TITLE_FONTSIZE)
+            apply_grid(ax)
+            if ax.get_legend() is not None and ax is not row_axes[2]:
+                ax.get_legend().remove()
     save_figure(fig, output_dir / "interpretable_feature_separation.png")
 
 
-def plot_pca(features: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
-    """Plot a PCA projection from standardized interpretable candidate features.
+def pca_coordinates(features: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
+    """Compute PCA coordinates from standardized candidate features.
 
     Args:
         features (pd.DataFrame): Candidate feature table.
-        output_dir (Path): Directory where figures are saved.
 
     Returns:
-        pd.DataFrame: PCA coordinates joined with group metadata.
+        tuple[pd.DataFrame, np.ndarray]: PCA coordinates with metadata and explained variance ratios.
     """
 
     values = features[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -528,36 +565,56 @@ def plot_pca(features: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
             "group": features["group"].to_numpy(),
             "machine": features["machine"].to_numpy(),
             "file": features["file"].to_numpy(),
+            "image_stage": features["image_stage"].to_numpy(),
         }
     )
-    fig, ax = plt.subplots(figsize=(7, 5.5))
-    sns.scatterplot(
-        data=pca_df,
-        x="pc1",
-        y="pc2",
-        hue="group",
-        alpha=0.35,
-        s=22,
-        ax=ax,
-    )
-    ax.set_title(
-        "PCA of Candidate Features\n"
-        f"Explained variance: PC1={pca.explained_variance_ratio_[0]:.2f}, "
-        f"PC2={pca.explained_variance_ratio_[1]:.2f}"
-    )
-    apply_robust_xlim(ax, pca_df["pc1"].to_numpy())
-    apply_robust_ylim(ax, pca_df["pc2"].to_numpy())
-    apply_grid(ax)
+    return pca_df, pca.explained_variance_ratio_
+
+
+def plot_pca(harmonized_features: pd.DataFrame, denoised_features: pd.DataFrame, output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Plot a PCA projection from standardized interpretable candidate features.
+
+    Args:
+        harmonized_features (pd.DataFrame): Candidate feature table measured on harmonized images.
+        denoised_features (pd.DataFrame): Candidate feature table measured on denoised images.
+        output_dir (Path): Directory where figures are saved.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: Harmonized and denoised PCA coordinate tables.
+    """
+
+    harmonized_pca, harmonized_variance = pca_coordinates(harmonized_features)
+    denoised_pca, denoised_variance = pca_coordinates(denoised_features)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    for ax, pca_df, variance, stage_label in (
+        (axes[0], harmonized_pca, harmonized_variance, "Harmonized"),
+        (axes[1], denoised_pca, denoised_variance, "Denoised"),
+    ):
+        sns.scatterplot(
+            data=pca_df,
+            x="pc1",
+            y="pc2",
+            hue="group",
+            alpha=0.35,
+            s=22,
+            ax=ax,
+        )
+        ax.set_title(
+            f"{stage_label} PCA of Candidate Features\n"
+            f"Explained variance: PC1={variance[0]:.2f}, PC2={variance[1]:.2f}"
+        )
+        apply_robust_xlim(ax, pca_df["pc1"].to_numpy())
+        apply_robust_ylim(ax, pca_df["pc2"].to_numpy())
+        apply_grid(ax)
     save_figure(fig, output_dir / "candidate_feature_pca.png")
-    return pca_df
+    return harmonized_pca, denoised_pca
 
 
-def plot_umap(features: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
-    """Plot a UMAP projection from standardized interpretable candidate features.
+def umap_coordinates(features: pd.DataFrame) -> pd.DataFrame:
+    """Compute UMAP coordinates from standardized candidate features.
 
     Args:
         features (pd.DataFrame): Candidate feature table.
-        output_dir (Path): Directory where figures are saved.
 
     Returns:
         pd.DataFrame: UMAP coordinates joined with group metadata.
@@ -573,72 +630,104 @@ def plot_umap(features: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
         random_state=42,
     )
     coords = reducer.fit_transform(scaled)
-    umap_df = pd.DataFrame(
+    return pd.DataFrame(
         {
             "umap1": coords[:, 0],
             "umap2": coords[:, 1],
             "group": features["group"].to_numpy(),
             "machine": features["machine"].to_numpy(),
             "file": features["file"].to_numpy(),
+            "image_stage": features["image_stage"].to_numpy(),
         }
     )
-    fig, ax = plt.subplots(figsize=(7, 5.5))
-    sns.scatterplot(
-        data=umap_df,
-        x="umap1",
-        y="umap2",
-        hue="group",
-        alpha=0.35,
-        s=UMAP_DOT_SIZE,
-        ax=ax,
-    )
-    ax.set_title("UMAP of Candidate Features")
-    apply_robust_xlim(ax, umap_df["umap1"].to_numpy())
-    apply_robust_ylim(ax, umap_df["umap2"].to_numpy())
-    apply_grid(ax)
+
+
+def plot_umap(harmonized_features: pd.DataFrame, denoised_features: pd.DataFrame, output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Plot a UMAP projection from standardized interpretable candidate features.
+
+    Args:
+        harmonized_features (pd.DataFrame): Candidate feature table measured on harmonized images.
+        denoised_features (pd.DataFrame): Candidate feature table measured on denoised images.
+        output_dir (Path): Directory where figures are saved.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: Harmonized and denoised UMAP coordinate tables.
+    """
+
+    harmonized_umap = umap_coordinates(harmonized_features)
+    denoised_umap = umap_coordinates(denoised_features)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    for ax, umap_df, stage_label in (
+        (axes[0], harmonized_umap, "Harmonized"),
+        (axes[1], denoised_umap, "Denoised"),
+    ):
+        sns.scatterplot(
+            data=umap_df,
+            x="umap1",
+            y="umap2",
+            hue="group",
+            alpha=0.35,
+            s=UMAP_DOT_SIZE,
+            ax=ax,
+        )
+        ax.set_title(f"{stage_label} UMAP of Candidate Features")
+        apply_robust_xlim(ax, umap_df["umap1"].to_numpy())
+        apply_robust_ylim(ax, umap_df["umap2"].to_numpy())
+        apply_grid(ax)
     save_figure(fig, output_dir / "candidate_feature_umap.png")
-    return umap_df
+    return harmonized_umap, denoised_umap
 
 
-def plot_umap_by_image(umap_df: pd.DataFrame, output_dir: Path) -> None:
+def plot_umap_by_image(harmonized_umap_df: pd.DataFrame, denoised_umap_df: pd.DataFrame, output_dir: Path) -> None:
     """Plot UMAP coordinates colored by source image to inspect batch effects.
 
     Args:
-        umap_df (pd.DataFrame): UMAP coordinate table.
+        harmonized_umap_df (pd.DataFrame): Harmonized UMAP coordinate table.
+        denoised_umap_df (pd.DataFrame): Denoised UMAP coordinate table.
         output_dir (Path): Directory where the figure is saved.
 
     Returns:
         None: The batch-effect plot is written to disk.
     """
 
-    fig, ax = plt.subplots(figsize=(8.5, 6.5))
-    sns.scatterplot(
-        data=umap_df,
-        x="umap1",
-        y="umap2",
-        hue="file",
-        style="group",
-        palette=image_batch_palette(umap_df),
-        markers=group_markers(umap_df),
-        alpha=0.42,
-        s=UMAP_DOT_SIZE,
-        ax=ax,
-    )
-    ax.set_title("UMAP by Source Image (Batch Effect Check)")
-    apply_robust_xlim(ax, umap_df["umap1"].to_numpy())
-    apply_robust_ylim(ax, umap_df["umap2"].to_numpy())
-    apply_grid(ax)
-    ax.legend(fontsize=6, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6.5))
+    for ax, umap_df, stage_label in (
+        (axes[0], harmonized_umap_df, "Harmonized"),
+        (axes[1], denoised_umap_df, "Denoised"),
+    ):
+        sns.scatterplot(
+            data=umap_df,
+            x="umap1",
+            y="umap2",
+            hue="file",
+            style="group",
+            palette=image_batch_palette(umap_df),
+            markers=group_markers(umap_df),
+            alpha=0.42,
+            s=UMAP_DOT_SIZE,
+            ax=ax,
+        )
+        ax.set_title(f"{stage_label} UMAP by Source Image (Batch Effect Check)")
+        apply_robust_xlim(ax, umap_df["umap1"].to_numpy())
+        apply_robust_ylim(ax, umap_df["umap2"].to_numpy())
+        apply_grid(ax)
+        ax.legend(fontsize=6, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     save_figure(fig, output_dir / "candidate_feature_umap_by_image.png")
 
 
-def plot_umap_clusters(umap_df: pd.DataFrame, cluster_assignments: pd.DataFrame, output_dir: Path) -> None:
+def plot_umap_clusters(
+    umap_df: pd.DataFrame,
+    cluster_assignments: pd.DataFrame,
+    output_dir: Path,
+    output_name: str = "candidate_feature_umap_clusters.png",
+) -> None:
     """Plot UMAP labels, source-image batches, and clustering technique assignments.
 
     Args:
         umap_df (pd.DataFrame): UMAP coordinate table.
         cluster_assignments (pd.DataFrame): Cluster label table containing one column per method.
         output_dir (Path): Directory where the figure is saved.
+        output_name (str): Output PNG filename.
 
     Returns:
         None: The cluster plot is written to disk.
@@ -705,22 +794,75 @@ def plot_umap_clusters(umap_df: pd.DataFrame, cluster_assignments: pd.DataFrame,
         ax.set_yticks([])
     for ax in flattened_axes[2 + len(methods) :]:
         ax.axis("off")
-    save_figure(fig, output_dir / "candidate_feature_umap_clusters.png")
+    save_figure(fig, output_dir / output_name)
 
 
-def plot_feature_distributions(features: pd.DataFrame, output_dir: Path) -> None:
+def plot_cluster_composition(
+    umap_df: pd.DataFrame,
+    cluster_assignments: pd.DataFrame,
+    output_dir: Path,
+    output_name: str = "cluster_composition_grid.png",
+) -> None:
+    """Plot stacked bar charts showing the biological composition of all unsupervised clusters.
+
+    Args:
+        umap_df (pd.DataFrame): DataFrame containing UMAP coordinates and group labels.
+        cluster_assignments (pd.DataFrame): DataFrame containing cluster labels for different methods.
+        output_dir (Path): Directory where the figure is saved.
+        output_name (str): Output PNG filename.
+
+    Returns:
+        None: The figure is written to disk.
+    """
+
+    methods = [column for column in cluster_assignments.columns if column.startswith("cluster_")]
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    flattened_axes = axes.ravel()
+
+    for ax, method in zip(flattened_axes, methods):
+        df = umap_df[["group"]].copy()
+        df["cluster"] = cluster_assignments[method].astype(str)
+
+        composition = pd.crosstab(df["cluster"], df["group"])
+        composition_pct = composition.div(composition.sum(axis=1), axis=0) * 100
+
+        composition_pct.plot(kind="bar", stacked=True, ax=ax, color=["#1f77b4", "#ff7f0e"], alpha=0.8)
+
+        display_name = method.replace("cluster_", "")
+        ax.set_title(display_name, fontsize=PANEL_TITLE_FONTSIZE)
+        ax.set_xlabel("Cluster ID", fontsize=PANEL_TITLE_FONTSIZE - 2)
+        ax.set_ylabel("Percentage (%)", fontsize=PANEL_TITLE_FONTSIZE - 2)
+
+        if ax is flattened_axes[0]:
+            ax.legend(title="True Label", fontsize=10, title_fontsize=12)
+        else:
+            if ax.get_legend() is not None:
+                ax.get_legend().remove()
+
+        apply_grid(ax)
+
+    # Hide any unused axes if there are fewer methods than subplots
+    for ax in flattened_axes[len(methods):]:
+        ax.axis("off")
+
+    save_figure(fig, output_dir / output_name)
+
+
+def plot_feature_distributions(harmonized_features: pd.DataFrame, denoised_features: pd.DataFrame, output_dir: Path) -> None:
     """Plot group distributions for the most relevant candidate features.
 
     Args:
-        features (pd.DataFrame): Candidate feature table.
+        harmonized_features (pd.DataFrame): Candidate feature table measured on harmonized images.
+        denoised_features (pd.DataFrame): Candidate feature table measured on denoised images.
         output_dir (Path): Directory where figures are saved.
 
     Returns:
         None: Figure is written to disk.
     """
 
-    melted = features.melt(
-        id_vars=["group", "file"],
+    combined = pd.concat([harmonized_features, denoised_features], ignore_index=True)
+    melted = combined.melt(
+        id_vars=["group", "file", "image_stage"],
         value_vars=["area", "axis_ratio", "eccentricity", "sbr", "cnr", "solidity"],
         var_name="feature",
         value_name="value",
@@ -728,7 +870,7 @@ def plot_feature_distributions(features: pd.DataFrame, output_dir: Path) -> None
     fig, axes = plt.subplots(2, 3, figsize=(14, 8))
     for ax, feature in zip(axes.ravel(), ["area", "axis_ratio", "eccentricity", "sbr", "cnr", "solidity"]):
         subset = melted[melted["feature"] == feature]
-        sns.violinplot(data=subset, x="group", y="value", ax=ax, cut=0, inner="quartile")
+        sns.violinplot(data=subset, x="group", y="value", hue="image_stage", ax=ax, cut=0, inner="quartile", split=True)
         ax.set_title(feature, fontsize=PANEL_TITLE_FONTSIZE)
         ax.set_xlabel("")
         ax.set_ylabel("")
@@ -741,6 +883,8 @@ def plot_feature_distributions(features: pd.DataFrame, output_dir: Path) -> None
         else:
             apply_robust_ylim(ax, subset["value"].to_numpy())
         apply_grid(ax)
+        if ax.get_legend() is not None:
+            ax.get_legend().set_title("")
     save_figure(fig, output_dir / "candidate_feature_distributions.png")
 
 
@@ -802,26 +946,45 @@ def main() -> None:
     configure_matplotlib()
     output_dir = ensure_dir(SEPARABILITY_ROOT)
     features = collect_candidate_features()
-    features.to_csv(output_dir / "candidate_features.csv", index=False)
+    harmonized_features = feature_view_for_stage(features, "harmonized")
+    denoised_features = feature_view_for_stage(features, "denoised")
+    harmonized_features.to_csv(output_dir / "candidate_features.csv", index=False)
+    denoised_features.to_csv(output_dir / "candidate_features_denoised.csv", index=False)
 
-    summary = build_separability_summary(features)
+    summary = build_separability_summary(harmonized_features)
     summary.to_csv(output_dir / "feature_separability_summary.csv", index=False)
+    denoised_summary = build_separability_summary(denoised_features)
+    denoised_summary.to_csv(output_dir / "feature_separability_summary_denoised.csv", index=False)
     candidate_counts = (
-        features.groupby(["group", "machine", "file"])
+        harmonized_features.groupby(["group", "machine", "file"])
         .size()
         .reset_index(name="candidate_count")
     )
     candidate_counts.to_csv(output_dir / "candidate_count_summary.csv", index=False)
+    denoised_candidate_counts = (
+        denoised_features.groupby(["group", "machine", "file"])
+        .size()
+        .reset_index(name="candidate_count")
+    )
+    denoised_candidate_counts.to_csv(output_dir / "candidate_count_summary_denoised.csv", index=False)
 
-    plot_feature_scatter(features, output_dir)
-    pca_df = plot_pca(features, output_dir)
+    plot_feature_scatter(harmonized_features, denoised_features, output_dir)
+    pca_df, denoised_pca_df = plot_pca(harmonized_features, denoised_features, output_dir)
     pca_df.to_csv(output_dir / "candidate_feature_pca_coordinates.csv", index=False)
-    umap_df = plot_umap(features, output_dir)
+    denoised_pca_df.to_csv(output_dir / "candidate_feature_pca_coordinates_denoised.csv", index=False)
+    umap_df, denoised_umap_df = plot_umap(harmonized_features, denoised_features, output_dir)
     umap_df.to_csv(output_dir / "candidate_feature_umap_coordinates.csv", index=False)
+    denoised_umap_df.to_csv(output_dir / "candidate_feature_umap_coordinates_denoised.csv", index=False)
     true_labels = encoded_group_labels(umap_df["group"])
     umap_separation = label_separation_metrics(umap_df[["umap1", "umap2"]].to_numpy(), true_labels)
     umap_separation.to_csv(output_dir / "umap_true_label_separation_metrics.csv", index=False)
-    plot_umap_by_image(umap_df, output_dir)
+    denoised_true_labels = encoded_group_labels(denoised_umap_df["group"])
+    denoised_umap_separation = label_separation_metrics(
+        denoised_umap_df[["umap1", "umap2"]].to_numpy(),
+        denoised_true_labels,
+    )
+    denoised_umap_separation.to_csv(output_dir / "umap_true_label_separation_metrics_denoised.csv", index=False)
+    plot_umap_by_image(umap_df, denoised_umap_df, output_dir)
     clusters = cluster_umap(umap_df[["umap1", "umap2"]].to_numpy())
     cluster_assignments = umap_df[["group", "machine", "file", "umap1", "umap2"]].copy()
     for method, labels in clusters.items():
@@ -830,8 +993,37 @@ def main() -> None:
     cluster_metrics = cluster_quality_metrics(umap_df[["umap1", "umap2"]].to_numpy(), true_labels, clusters)
     cluster_metrics.to_csv(output_dir / "umap_cluster_metrics.csv", index=False)
     plot_umap_clusters(umap_df, cluster_assignments, output_dir)
-    plot_feature_distributions(features, output_dir)
-    save_interpretation(features, summary, candidate_counts, umap_separation, cluster_metrics, output_dir)
+    plot_cluster_composition(
+        umap_df,
+        cluster_assignments,
+        output_dir,
+        output_name="cluster_composition_grid.png",
+    )
+    denoised_clusters = cluster_umap(denoised_umap_df[["umap1", "umap2"]].to_numpy())
+    denoised_cluster_assignments = denoised_umap_df[["group", "machine", "file", "umap1", "umap2"]].copy()
+    for method, labels in denoised_clusters.items():
+        denoised_cluster_assignments[f"cluster_{method}"] = labels
+    denoised_cluster_assignments.to_csv(output_dir / "umap_cluster_assignments_denoised.csv", index=False)
+    denoised_cluster_metrics = cluster_quality_metrics(
+        denoised_umap_df[["umap1", "umap2"]].to_numpy(),
+        denoised_true_labels,
+        denoised_clusters,
+    )
+    denoised_cluster_metrics.to_csv(output_dir / "umap_cluster_metrics_denoised.csv", index=False)
+    plot_umap_clusters(
+        denoised_umap_df,
+        denoised_cluster_assignments,
+        output_dir,
+        output_name="candidate_feature_umap_clusters_denoised.png",
+    )
+    plot_cluster_composition(
+        denoised_umap_df,
+        denoised_cluster_assignments,
+        output_dir,
+        output_name="cluster_composition_grid_denoised.png",
+    )
+    plot_feature_distributions(harmonized_features, denoised_features, output_dir)
+    save_interpretation(harmonized_features, summary, candidate_counts, umap_separation, cluster_metrics, output_dir)
     print(f"Separability evaluation complete: wrote candidate diagnostics to {output_dir}")
 
 

@@ -187,6 +187,7 @@ def main() -> None:
             record.path.name,
             record.group,
             record.machine,
+            denoised_intensity_image=denoised,
         )
         feature_rows.extend(features)
         paths = save_enhancement_images(
@@ -200,6 +201,8 @@ def main() -> None:
         )
         candidate_sbr = [float(row["sbr"]) for row in features]
         candidate_cnr = [float(row["cnr"]) for row in features]
+        denoised_candidate_sbr = [float(row["denoised_sbr"]) for row in features]
+        denoised_candidate_cnr = [float(row["denoised_cnr"]) for row in features]
         before_noise = estimate_noise_mad(harmonized_result.harmonized)
         after_noise = estimate_noise_mad(denoised)
         metric_rows.append(
@@ -216,6 +219,8 @@ def main() -> None:
                 "local_peak_count": count_local_peaks(enhanced),
                 "median_candidate_sbr": float(np.median(candidate_sbr)) if candidate_sbr else 0.0,
                 "median_candidate_cnr": float(np.median(candidate_cnr)) if candidate_cnr else 0.0,
+                "median_denoised_candidate_sbr": float(np.median(denoised_candidate_sbr)) if denoised_candidate_sbr else 0.0,
+                "median_denoised_candidate_cnr": float(np.median(denoised_candidate_cnr)) if denoised_candidate_cnr else 0.0,
                 "mean_candidate_area": float(np.mean([row["area"] for row in features])) if features else 0.0,
                 **paths,
             }
